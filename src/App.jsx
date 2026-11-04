@@ -26,7 +26,7 @@ import {
   siteConfig,
   whatsappLink,
 } from "./config/site";
-
+import { trackEvent } from "./lib/analytics";
 const treatments = [
   {
     icon: Smile,
@@ -186,6 +186,7 @@ function Header() {
             target="_blank"
             rel="noreferrer"
             className="nav-cta"
+            onClick={() => trackEvent("whatsapp_click", { placement: "header" })}
           >
             Agendar avaliação
             <ArrowUpRight size={16} />
@@ -233,6 +234,7 @@ function Hero() {
               className="button-primary"
               data-track="whatsapp"
               data-location="hero"
+              onClick={() => trackEvent("whatsapp_click", { placement: "header" })}
             >
               <MessageCircle size={19} />
               Agendar pelo WhatsApp
@@ -325,6 +327,7 @@ function Treatments() {
                   rel="noreferrer"
                   data-track="whatsapp"
                   data-location={`treatment-${item.title}`}
+                  onClick={() => trackEvent("whatsapp_click", { placement: "header" })}
                 >
                   Saiba mais
                   <ArrowUpRight size={17} />
@@ -505,6 +508,7 @@ function FAQ() {
             target="_blank"
             rel="noreferrer"
             className="button-primary"
+            onClick={() => trackEvent("whatsapp_click", { placement: "header" })}
           >
             <MessageCircle size={18} />
             Fale conosco
@@ -544,52 +548,93 @@ function Contact() {
     phone: "",
     subject: "",
   });
-
-  const [status, setStatus] = useState("");
+  const [formStatus, setFormStatus] = useState("");
+  const [sending, setSending] = useState(false);
 
   async function handleSubmit(event) {
     event.preventDefault();
-
+  
     if (!form.name.trim() || !form.phone.trim()) {
-      setStatus("Preencha seu nome e telefone.");
+      setFormStatus("Preencha seu nome e telefone.");
       return;
     }
-
-    if (!siteConfig.formEndpoint) {
-      const message =
-        `Olá! Gostaria de solicitar um agendamento.\n\n` +
-        `Nome: ${form.name}\n` +
-        `Telefone: ${form.phone}\n` +
-        `Assunto: ${form.subject || "Avaliação odontológica"}`;
-
-      window.open(whatsappLink(message), "_blank");
-
-      setStatus("Você será direcionado ao WhatsApp para concluir o contato.");
-      return;
-    }
-
+  
+    setSending(true);
+    setFormStatus("");
+  
+    const formElement = event.currentTarget;
+    const formData = new FormData(formElement);
+  
+    const payload = {
+      name: form.name.trim(),
+      phone: form.phone.trim(),
+      subject: form.subject || "Avaliação odontológica",
+      website: formData.get("website") || "",
+    };
+  
     try {
-      const response = await fetch(siteConfig.formEndpoint, {
+      const response = await fetch("/api/leads", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          Accept: "application/json",
+          "Accept": "application/json",
         },
-        body: JSON.stringify(form),
+        body: JSON.stringify(payload),
       });
-
-      if (!response.ok) {
-        throw new Error("Falha ao enviar");
+  
+      // Lê como texto primeiro para não quebrar se a resposta vier vazia.
+      const responseText = await response.text();
+  
+      let result = {};
+  
+      if (responseText) {
+        try {
+          result = JSON.parse(responseText);
+        } catch {
+          console.error("Resposta não JSON da API:", responseText);
+  
+          throw new Error(
+            `O servidor retornou uma resposta inválida (HTTP ${response.status}).`
+          );
+        }
       }
-
-      window.dataLayer?.push({
-        event: "form_submit",
+  
+      if (!response.ok) {
+        throw new Error(
+          result.error || `Erro ao enviar contato (HTTP ${response.status}).`
+        );
+      }
+  
+      if (!result.success) {
+        throw new Error(
+          result.error || "O servidor não confirmou o recebimento do contato."
+        );
+      }
+  
+      setForm({
+        name: "",
+        phone: "",
+        subject: "",
       });
-
-      setStatus("Solicitação enviada com sucesso!");
-      setForm({ name: "", phone: "", subject: "" });
-    } catch {
-      setStatus("Não foi possível enviar. Tente novamente pelo WhatsApp.");
+  
+      setFormStatus(
+        "Contato enviado com sucesso! Em breve entraremos em contato."
+      );
+  
+      trackEvent("form_submit", {
+        form_name: "contact",
+      });
+  
+    } catch (error) {
+      console.error("Erro ao enviar formulário:", error);
+  
+      setFormStatus(
+        error.message ||
+        "Não foi possível enviar. Tente novamente ou fale pelo WhatsApp."
+      );
+  
+    } finally {
+      setSending(false);
     }
   }
 
@@ -613,7 +658,8 @@ function Contact() {
             <MessageCircle />
             <div>
               <strong>WhatsApp</strong>
-              <a href={whatsappLink()} target="_blank" rel="noreferrer">
+              <a href={whatsappLink()} target="_blank" rel="noreferrer"
+                onClick={() => trackEvent("whatsapp_click", { placement: "header" })}>
                 Conversar com nossa equipe
               </a>
             </div>
@@ -623,7 +669,9 @@ function Contact() {
             <Phone />
             <div>
               <strong>Telefone</strong>
-              <a href={`tel:+${siteConfig.phone}`}>
+              <a href={`tel:+${siteConfig.phone}`}
+              onClick={() => trackEvent("phone_click", { placement: "contact" })}
+              >
                 {siteConfig.phone}
               </a>
             </div>
@@ -685,7 +733,6 @@ function Contact() {
                 setForm({ ...form, phone: e.target.value })
               }
             />
-
             <label htmlFor="subject">Assunto</label>
 
             <select
@@ -704,14 +751,27 @@ function Contact() {
               ))}
             </select>
 
-            <button type="submit" className="button-primary form-button">
-              Solicitar atendimento
+            {/* Campo honeypot: deve ficar invisível para pessoas. */}
+            <div className="form-honeypot" aria-hidden="true">
+              <label>
+                Não preencha este campo
+                <input
+                  type="text"
+                  name="website"
+                  tabIndex={-1}
+                  autoComplete="off"
+                />
+              </label>
+            </div>
+
+            <button type="submit" disabled={sending} className="button-primary form-button">
+            {sending ? "Enviando..." : "Solicitar atendimento"}
               <ArrowRight size={18} />
             </button>
 
-            {status && (
-              <p className="form-status" role="status">
-                {status}
+            {formStatus && (
+              <p role="status" aria-live="polite">
+                {formStatus}
               </p>
             )}
 
@@ -760,10 +820,13 @@ function Footer() {
 
         <div>
           <h4>Contato</h4>
-          <a href={whatsappLink()} target="_blank" rel="noreferrer">
+          <a href={whatsappLink()} target="_blank" rel="noreferrer"
+            onClick={() => trackEvent("whatsapp_click", { placement: "header" })}>
             WhatsApp
           </a>
-          <a href={`tel:+${siteConfig.phone}`}>Telefone</a>
+          <a href={`tel:+${siteConfig.phone}`}
+          onClick={() => trackEvent("phone_click", { placement: "contact" })}
+          >Telefone</a>
           <a href="#contato">Localização</a>
         </div>
 
@@ -820,6 +883,7 @@ function WhatsAppButton() {
       aria-label="Agendar pelo WhatsApp"
       data-track="whatsapp"
       data-location="floating"
+      onClick={() => trackEvent("whatsapp_click", { placement: "header" })}
     >
       <MessageCircle size={26} />
     </a>

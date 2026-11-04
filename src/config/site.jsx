@@ -1,8 +1,8 @@
 export const siteConfig = {
-    name: "Clínica Odontológica",
+    name: "Clínica Odontológica - Iago Nogueira",
     slogan: "Seu sorriso merece cuidado especial.",
   
-    phone: "5511999999999",
+    phone: "5538998861089",
     email: "contato@seudominio.com.br",
   
     address: {
